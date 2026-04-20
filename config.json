@@ -1,0 +1,5 @@
+{
+  "port": 8080,
+  "mmdb_path": "/opt/geoip/data/GeoLite2-City.mmdb",
+  "enable_health": true
+}

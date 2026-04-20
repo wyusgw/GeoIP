@@ -1,0 +1,10 @@
+[Unit]
+Description=GeoIP Service
+After=network.target
+
+[Service]
+ExecStart=/opt/geoip/bin/geoip-service -config /opt/geoip/config/config.json
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
