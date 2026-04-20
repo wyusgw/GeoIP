@@ -133,6 +133,26 @@ sudo systemctl start geoip
 sudo systemctl enable geoip
 ```
 
+5.  定时更新 MaxMind 資料庫可以使用 `geoipupdate` 工具，請參考以下說明。
+
+## 定时更新安装
+
+```bash
+apt install geoipupdate
+```
+
+## 定时任务配置
+
+```bash
+crontab -e
+```
+
+```bash
+0 3 * * 2,5 /usr/bin/geoipupdate -f /opt/geoip/conf/GeoIP.conf -v
+0 3 * * 2,5 /usr/bin/geoipupdate
+```
+
+
 ## 依賴
 
 - [github.com/oschwald/maxminddb-golang/v2](https://github.com/oschwald/maxminddb-golang/v2)
