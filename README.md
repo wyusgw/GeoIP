@@ -183,16 +183,18 @@ MaxMind GeoLite2 / DB-IP 等資料庫（尤其是免費 / Lite 版本）通常�
 
 **優先順序**：資料庫本身的翻譯 > 本地對照表 > 英文原名。也就是說對照表只會補資料庫缺漏的部分，不會覆蓋資料庫已有的翻譯。
 
-**對照表格式**（`name_mapping_path` 指向的 JSON 檔）以 **geonameid** 為 key，而不是英文名稱字串——geonameid 是 [GeoNames](https://www.geonames.org/) 的地理實體 ID，`country`/`region`/`city` 的 mmdb 記錄本身也會帶 `geoname_id` 欄位，用它比對可以避免同名地區或大小寫不一致造成誤配：
+**對照表格式**（`name_mapping_path` 指向的 JSON 檔）以 mmdb 記錄裡的**英文名稱字串**為 key：
 ```json
 {
-  "1814991": { "zh-CN": "中国" },
-  "1784764": { "zh-CN": "浙江" },
-  "1799397": { "zh-CN": "宁波市" }
+  "China": { "zh-CN": "中国" },
+  "Zhejiang": { "zh-CN": "浙江" },
+  "Ningbo": { "zh-CN": "宁波市" }
 }
 ```
-- 第一層 key 為 geonameid（字串或數字皆可，會被解析成整數）。
+- 第一層 key 為資料庫中的**英文原名**（必須與 mmdb `names.en` 完全一致才會命中）。
 - 第二層 key 為語言代碼（同 `lang` 參數支援的語系），值為翻譯後的名稱。
+
+> **為什麼不用 geonameid？** mmdb 的 `country`/`region`/`city` 記錄雖然理論上會帶 [GeoNames](https://www.geonames.org/) 的 `geoname_id` 欄位，但實測發現 **DB-IP City Lite 的 `region`/`city` 記錄該欄位固定是 `0`**（即使官方 schema 文件宣稱有這個欄位，Lite 版實際資料沒填）——可以用 `fields=region_geoname_id,city_geoname_id` 自行驗證你的資料庫是否也是如此。因此只能退而求其次用英文名稱字串比對，代價是少數「不同地方剛好同名」（例如國家 Georgia 和美國的 Georgia 州）可能會誤配；如果你的資料庫的 `geoname_id` 確實有填值，用該欄位比對會更準確，但目前工具沒有支援，需要你自行擴充。
 
 專案內附上 `mapping.example.json` 作為格式範例（內容為真實查證過的 China / Zhejiang / Ningbo 對照）。
 
@@ -211,7 +213,7 @@ go run ./tools/genmapping \
 - `-out`: 輸出的對照表路徑（預設 `mapping.json`），完成後把 `name_mapping_path` 指向這個檔案即可。
 - `-langs`: 要抽取的語言，逗號分隔（預設涵蓋除 `en` 外的所有支援語系）。
 
-GeoNames 的資料裡中文名稱多半標記在通用的 `zh`（而非 `zh-CN`）語系代碼下，葡萄牙文也多半在 `pt` 而非 `pt-BR` 下；工具內建了這個對應關係，會優先採用精確代碼（`zh-CN`/`pt-BR`），沒有時才 fallback 到通用代碼（`zh`/`pt`）。同一個 geonameid 有多筆候選譯名時，會優先採用 GeoNames 標記的 `isPreferredName`，其次是 `isShortName`。
+GeoNames 的資料裡中文名稱多半標記在通用的 `zh`（而非 `zh-CN`）語系代碼下，葡萄牙文也多半在 `pt` 而非 `pt-BR` 下；工具內建了這個對應關係，會優先採用精確代碼（`zh-CN`/`pt-BR`），沒有時才 fallback 到通用代碼（`zh`/`pt`）。同一個 geonameid 有多筆候選譯名時，會優先採用 GeoNames 標記的 `isPreferredName`，其次是 `isShortName`；不同 geonameid 剛好有相同英文名稱時，會優先採用翻譯候選 rank 較高者，同分則採用較小的 geonameid（通常代表較早收錄、較知名的條目），這是啟發式規則，不保證每筆都正確，重要地名建議產生後人工檢查。
 
 **注意**：原始的 `alternateNamesV2.txt`（748MB）與跑出來的完整 `mapping.json` 都不會進版本控制（見 `.gitignore`），請自行下載/產生並部署到伺服器上，只有 `name_mapping_path` 指向的檔案需要放到部署環境即可。未設定 `name_mapping_path`（或檔案讀取失敗）時，`translate=true` 不會有任何效果，會直接回退為英文原名，且服務不會因此中斷。
 

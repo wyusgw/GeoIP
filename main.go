@@ -119,17 +119,24 @@ var (
 	nameMapping NameMapping
 )
 
-// NameMapping is a fallback translation table keyed by GeoNames geonameid,
-// used when the mmdb itself has no translation for a given language (common
-// for region/city names in lite-tier databases). geonameid is the same id
-// exposed by the mmdb's own "geoname_id" field, so lookups don't depend on
-// fragile English-string matching. Structure:
+// NameMapping is a fallback translation table keyed by the mmdb's English
+// name string, used when the mmdb itself has no translation for a given
+// language (common for region/city names in lite-tier databases).
 //
-//	{ "1784764": { "zh-CN": "浙江" }, "1799397": { "zh-CN": "宁波" } }
+// It's keyed by English name rather than geonameid because some databases
+// (e.g. DB-IP City Lite) leave geoname_id as 0 on subdivisions/city records
+// even though the mmdb schema declares the field - only the plain English
+// name string is reliably present. This does mean two different places
+// that happen to share an English name (e.g. "Georgia" the country vs. the
+// US state) can collide; tools/genmapping picks one deterministically, and
+// you can hand-edit the generated file for any specific case that matters.
+// Structure:
+//
+//	{ "China": { "zh-CN": "中国" }, "Zhejiang": { "zh-CN": "浙江" } }
 //
 // Generate this file from GeoNames' alternateNamesV2.txt with
 // tools/genmapping (see README's "本地翻譯對照表" section).
-type NameMapping map[uint32]map[string]string
+type NameMapping map[string]map[string]string
 
 func loadNameMapping(path string) NameMapping {
 	if path == "" {
@@ -153,8 +160,8 @@ func loadNameMapping(path string) NameMapping {
 	return m
 }
 
-func mapTranslate(geonameID uint32, lang string) (string, bool) {
-	v, ok := nameMapping[geonameID][lang]
+func mapTranslate(englishName, lang string) (string, bool) {
+	v, ok := nameMapping[englishName][lang]
 	return v, ok && v != ""
 }
 
@@ -267,20 +274,22 @@ func safe(s string) string {
 }
 
 // resolveName returns the mmdb translation for lang when present, otherwise
-// falls back to the local geonameid-keyed mapping table (when useMapping is
-// set), otherwise falls back to English.
-func resolveName(geonameID uint32, names map[string]string, lang string, useMapping bool) string {
+// falls back to the local English-name-keyed mapping table (when useMapping
+// is set), otherwise falls back to English.
+func resolveName(names map[string]string, lang string, useMapping bool) string {
 	if v, ok := names[lang]; ok && v != "" {
 		return v
 	}
 
+	en := names[defaultLang]
+
 	if useMapping && lang != defaultLang {
-		if v, ok := mapTranslate(geonameID, lang); ok {
+		if v, ok := mapTranslate(en, lang); ok {
 			return v
 		}
 	}
 
-	return names[defaultLang]
+	return en
 }
 
 func isDBHealthy() bool {
@@ -324,8 +333,8 @@ func lookupIP(ipStr, lang string, useMapping bool) (Response, GeoIDs, error) {
 	}
 
 	res := Response{
-		Country: safe(resolveName(g.Country.GeonameID, g.Country.Names, lang, useMapping)),
-		City:    safe(resolveName(g.City.GeonameID, g.City.Names, lang, useMapping)),
+		Country: safe(resolveName(g.Country.Names, lang, useMapping)),
+		City:    safe(resolveName(g.City.Names, lang, useMapping)),
 		Region:  "Unknown",
 		IP:      ipStr,
 	}
@@ -335,7 +344,7 @@ func lookupIP(ipStr, lang string, useMapping bool) (Response, GeoIDs, error) {
 	}
 
 	if len(g.Subdivisions) > 0 {
-		res.Region = safe(resolveName(g.Subdivisions[0].GeonameID, g.Subdivisions[0].Names, lang, useMapping))
+		res.Region = safe(resolveName(g.Subdivisions[0].Names, lang, useMapping))
 		ids.Region = g.Subdivisions[0].GeonameID
 	}
 

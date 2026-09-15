@@ -1,3 +1,4 @@
 GeoNames/
 mapping.json
 *.mmdb
+geoip-service
