@@ -98,14 +98,55 @@ func filterResponse(res Response, fields []string) map[string]interface{} {
 }
 
 var (
-	db  *maxminddb.Reader
-	cfg Config
+	db          *maxminddb.Reader
+	cfg         Config
+	nameMapping NameMapping
 )
 
+// NameMapping is a fallback translation table keyed by GeoNames geonameid,
+// used when the mmdb itself has no translation for a given language (common
+// for region/city names in lite-tier databases). geonameid is the same id
+// exposed by the mmdb's own "geoname_id" field, so lookups don't depend on
+// fragile English-string matching. Structure:
+//
+//	{ "1784764": { "zh-CN": "浙江" }, "1799397": { "zh-CN": "宁波" } }
+//
+// Generate this file from GeoNames' alternateNamesV2.txt with
+// tools/genmapping (see README's "本地翻譯對照表" section).
+type NameMapping map[uint32]map[string]string
+
+func loadNameMapping(path string) NameMapping {
+	if path == "" {
+		return nil
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		log.Printf("warning: failed to open name mapping file %q: %v", path, err)
+		return nil
+	}
+	defer file.Close()
+
+	var m NameMapping
+	if err := json.NewDecoder(file).Decode(&m); err != nil {
+		log.Printf("warning: invalid name mapping file %q: %v", path, err)
+		return nil
+	}
+
+	log.Printf("loaded name mapping: %s (%d entries)", path, len(m))
+	return m
+}
+
+func mapTranslate(geonameID uint32, lang string) (string, bool) {
+	v, ok := nameMapping[geonameID][lang]
+	return v, ok && v != ""
+}
+
 type Config struct {
-	Port         int    `json:"port"`
-	MMDBPath     string `json:"mmdb_path"`
-	EnableHealth bool   `json:"enable_health"`
+	Port            int    `json:"port"`
+	MMDBPath        string `json:"mmdb_path"`
+	EnableHealth    bool   `json:"enable_health"`
+	NameMappingPath string `json:"name_mapping_path"`
 }
 
 type Response struct {
@@ -117,15 +158,18 @@ type Response struct {
 
 type Geo struct {
 	Country struct {
-		Names map[string]string `maxminddb:"names"`
+		GeonameID uint32            `maxminddb:"geoname_id"`
+		Names     map[string]string `maxminddb:"names"`
 	} `maxminddb:"country"`
 
 	Subdivisions []struct {
-		Names map[string]string `maxminddb:"names"`
+		GeonameID uint32            `maxminddb:"geoname_id"`
+		Names     map[string]string `maxminddb:"names"`
 	} `maxminddb:"subdivisions"`
 
 	City struct {
-		Names map[string]string `maxminddb:"names"`
+		GeonameID uint32            `maxminddb:"geoname_id"`
+		Names     map[string]string `maxminddb:"names"`
 	} `maxminddb:"city"`
 }
 
@@ -206,10 +250,20 @@ func safe(s string) string {
 	return s
 }
 
-func nameFor(names map[string]string, lang string) string {
+// resolveName returns the mmdb translation for lang when present, otherwise
+// falls back to the local geonameid-keyed mapping table (when useMapping is
+// set), otherwise falls back to English.
+func resolveName(geonameID uint32, names map[string]string, lang string, useMapping bool) string {
 	if v, ok := names[lang]; ok && v != "" {
 		return v
 	}
+
+	if useMapping && lang != defaultLang {
+		if v, ok := mapTranslate(geonameID, lang); ok {
+			return v
+		}
+	}
+
 	return names[defaultLang]
 }
 
@@ -242,7 +296,7 @@ func getDBInfo(path string) (bool, string, string, float64) {
 		age
 }
 
-func lookupIP(ipStr, lang string) (Response, error) {
+func lookupIP(ipStr, lang string, useMapping bool) (Response, error) {
 	addr, err := netip.ParseAddr(ipStr)
 	if err != nil {
 		return Response{}, fmt.Errorf("invalid ip")
@@ -254,14 +308,14 @@ func lookupIP(ipStr, lang string) (Response, error) {
 	}
 
 	res := Response{
-		Country: safe(nameFor(g.Country.Names, lang)),
-		City:    safe(nameFor(g.City.Names, lang)),
+		Country: safe(resolveName(g.Country.GeonameID, g.Country.Names, lang, useMapping)),
+		City:    safe(resolveName(g.City.GeonameID, g.City.Names, lang, useMapping)),
 		Region:  "Unknown",
 		IP:      ipStr,
 	}
 
 	if len(g.Subdivisions) > 0 {
-		res.Region = safe(nameFor(g.Subdivisions[0].Names, lang))
+		res.Region = safe(resolveName(g.Subdivisions[0].GeonameID, g.Subdivisions[0].Names, lang, useMapping))
 	}
 
 	return res, nil
@@ -276,6 +330,7 @@ func geoHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lang := resolveLang(r.URL.Query().Get("lang"))
+	useMapping, _ := strconv.ParseBool(r.URL.Query().Get("translate"))
 
 	fields, err := parseFields(r.URL.Query().Get("fields"))
 	if err != nil {
@@ -283,7 +338,7 @@ func geoHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := lookupIP(ipStr, lang)
+	res, err := lookupIP(ipStr, lang, useMapping)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if err.Error() == "invalid ip" {
@@ -338,6 +393,7 @@ func batchHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lang := resolveLang(r.URL.Query().Get("lang"))
+	useMapping, _ := strconv.ParseBool(r.URL.Query().Get("translate"))
 
 	fields, err := parseFields(r.URL.Query().Get("fields"))
 	if err != nil {
@@ -348,7 +404,7 @@ func batchHandler(w http.ResponseWriter, r *http.Request) {
 	if fields != nil {
 		results := make([]interface{}, len(req.IPs))
 		for i, ipStr := range req.IPs {
-			res, err := lookupIP(ipStr, lang)
+			res, err := lookupIP(ipStr, lang, useMapping)
 			if err != nil {
 				results[i] = BatchResult{IP: ipStr, Error: err.Error()}
 				continue
@@ -361,7 +417,7 @@ func batchHandler(w http.ResponseWriter, r *http.Request) {
 
 	results := make([]BatchResult, len(req.IPs))
 	for i, ipStr := range req.IPs {
-		res, err := lookupIP(ipStr, lang)
+		res, err := lookupIP(ipStr, lang, useMapping)
 		if err != nil {
 			results[i] = BatchResult{IP: ipStr, Error: err.Error()}
 			continue
@@ -411,6 +467,8 @@ func main() {
 		log.Fatalf("failed to open mmdb: %v", err)
 	}
 	defer db.Close()
+
+	nameMapping = loadNameMapping(cfg.NameMappingPath)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/geoip", geoHandler)
