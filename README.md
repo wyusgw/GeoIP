@@ -71,12 +71,15 @@ export CONFIG=/path/to/config.json
 
 ## API 使用
 
-### 查詢 IP 地理位置
+所有端點均以 `/api/v1` 為前綴。
 
-**端點**: `GET /`
+### 查詢單一 IP 地理位置
+
+**端點**: `GET /api/v1/geoip`
 
 **參數**:
 - `ip` (可選): 要查詢的 IP 地址。如果未提供，則使用請求者的 IP。
+- `lang` (可選): 回應語言，支援 `en`（預設）、`zh-CN`、`ja`、`ko`、`ru`、`fr`、`de`、`es`、`pt-BR`、`fa`。若資料庫中無對應翻譯（例如 MaxMind GeoLite2 未內建 `ko`、`fa` 譯名），會自動回退為 `en`。
 
 **回應**:
 ```json
@@ -90,14 +93,50 @@ export CONFIG=/path/to/config.json
 
 **範例**:
 ```bash
-curl "http://localhost:8080/?ip=8.8.8.8"
+curl "http://localhost:8080/api/v1/geoip?ip=8.8.8.8&lang=zh-CN"
+```
+
+### 批次查詢 IP 地理位置
+
+**端點**: `POST /api/v1/geoip/batch`
+
+**參數**:
+- `lang` (可選, query string): 回應語言，支援 `en`（預設）、`zh-CN`、`ja`、`ko`、`ru`、`fr`、`de`、`es`、`pt-BR`、`fa`，套用於整批結果。
+
+**請求主體**（最多 100 個 IP）:
+```json
+{
+  "ips": ["8.8.8.8", "1.1.1.1"]
+}
+```
+
+**回應**:
+```json
+{
+  "results": [
+    { "ip": "8.8.8.8", "country": "United States", "region": "California", "city": "San Francisco" },
+    { "ip": "1.1.1.1", "country": "Australia", "region": "Unknown", "city": "Unknown" }
+  ]
+}
+```
+
+若某個 IP 查詢失敗，該筆結果會改以 `error` 欄位表示，例如：
+```json
+{ "ip": "not-an-ip", "error": "invalid ip" }
+```
+
+**範例**:
+```bash
+curl -X POST "http://localhost:8080/api/v1/geoip/batch?lang=ja" \
+  -H "Content-Type: application/json" \
+  -d '{"ips":["8.8.8.8","1.1.1.1"]}'
 ```
 
 ### 健康檢查
 
 如果啟用健康檢查（`enable_health: true`），則可以使用以下端點：
 
-**端點**: `GET /health`
+**端點**: `GET /api/v1/health`
 
 **回應**:
 ```json
@@ -107,6 +146,17 @@ curl "http://localhost:8080/?ip=8.8.8.8"
   "last_update": "2023-10-01 12:00:00",
   "age_hours": "24.50",
   "size": "50.00 MB"
+}
+```
+
+### 版本資訊
+
+**端點**: `GET /api/v1/version`
+
+**回應**:
+```json
+{
+  "version": "1.0.0"
 }
 ```
 

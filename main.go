@@ -16,6 +16,32 @@ import (
 	"github.com/oschwald/maxminddb-golang/v2"
 )
 
+const Version = "1.0.0"
+
+const maxBatchSize = 100
+
+const defaultLang = "en"
+
+var supportedLangs = map[string]bool{
+	"en":    true,
+	"zh-CN": true,
+	"ja":    true,
+	"ko":    true,
+	"ru":    true,
+	"fr":    true,
+	"de":    true,
+	"es":    true,
+	"pt-BR": true,
+	"fa":    true,
+}
+
+func resolveLang(lang string) string {
+	if supportedLangs[lang] {
+		return lang
+	}
+	return defaultLang
+}
+
 var (
 	db  *maxminddb.Reader
 	cfg Config
@@ -125,6 +151,13 @@ func safe(s string) string {
 	return s
 }
 
+func nameFor(names map[string]string, lang string) string {
+	if v, ok := names[lang]; ok && v != "" {
+		return v
+	}
+	return names[defaultLang]
+}
+
 func isDBHealthy() bool {
 	if db == nil {
 		return false
@@ -154,6 +187,31 @@ func getDBInfo(path string) (bool, string, string, float64) {
 		age
 }
 
+func lookupIP(ipStr, lang string) (Response, error) {
+	addr, err := netip.ParseAddr(ipStr)
+	if err != nil {
+		return Response{}, fmt.Errorf("invalid ip")
+	}
+
+	var g Geo
+	if err := db.Lookup(addr).Decode(&g); err != nil {
+		return Response{}, fmt.Errorf("lookup failed")
+	}
+
+	res := Response{
+		Country: safe(nameFor(g.Country.Names, lang)),
+		City:    safe(nameFor(g.City.Names, lang)),
+		Region:  "Unknown",
+		IP:      ipStr,
+	}
+
+	if len(g.Subdivisions) > 0 {
+		res.Region = safe(nameFor(g.Subdivisions[0].Names, lang))
+	}
+
+	return res, nil
+}
+
 func geoHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -162,30 +220,75 @@ func geoHandler(w http.ResponseWriter, r *http.Request) {
 		ipStr = getClientIP(r)
 	}
 
-	addr, err := netip.ParseAddr(ipStr)
+	lang := resolveLang(r.URL.Query().Get("lang"))
+
+	res, err := lookupIP(ipStr, lang)
 	if err != nil {
-		http.Error(w, `{"error":"invalid ip"}`, http.StatusBadRequest)
+		status := http.StatusInternalServerError
+		if err.Error() == "invalid ip" {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), status)
 		return
-	}
-
-	var g Geo
-	if err := db.Lookup(addr).Decode(&g); err != nil {
-		http.Error(w, `{"error":"lookup failed"}`, http.StatusInternalServerError)
-		return
-	}
-
-	res := Response{
-		Country: safe(g.Country.Names["en"]),
-		City:    safe(g.City.Names["en"]),
-		Region:  "Unknown",
-		IP:      ipStr,
-	}
-
-	if len(g.Subdivisions) > 0 {
-		res.Region = safe(g.Subdivisions[0].Names["en"])
 	}
 
 	_ = json.NewEncoder(w).Encode(res)
+}
+
+type BatchRequest struct {
+	IPs []string `json:"ips"`
+}
+
+type BatchResult struct {
+	IP      string `json:"ip"`
+	Country string `json:"country,omitempty"`
+	Region  string `json:"region,omitempty"`
+	City    string `json:"city,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+func batchHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req BatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if len(req.IPs) == 0 {
+		http.Error(w, `{"error":"ips must not be empty"}`, http.StatusBadRequest)
+		return
+	}
+
+	if len(req.IPs) > maxBatchSize {
+		http.Error(w, fmt.Sprintf(`{"error":"too many ips, max %d"}`, maxBatchSize), http.StatusBadRequest)
+		return
+	}
+
+	lang := resolveLang(r.URL.Query().Get("lang"))
+
+	results := make([]BatchResult, len(req.IPs))
+	for i, ipStr := range req.IPs {
+		res, err := lookupIP(ipStr, lang)
+		if err != nil {
+			results[i] = BatchResult{IP: ipStr, Error: err.Error()}
+			continue
+		}
+		results[i] = BatchResult{IP: res.IP, Country: res.Country, Region: res.Region, City: res.City}
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": results})
+}
+
+func versionHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"version": Version})
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -224,10 +327,12 @@ func main() {
 	defer db.Close()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", geoHandler)
+	mux.HandleFunc("/api/v1/geoip", geoHandler)
+	mux.HandleFunc("/api/v1/geoip/batch", batchHandler)
+	mux.HandleFunc("/api/v1/version", versionHandler)
 
 	if cfg.EnableHealth {
-		mux.HandleFunc("/health", healthHandler)
+		mux.HandleFunc("/api/v1/health", healthHandler)
 	}
 
 	addr := ":" + strconv.Itoa(cfg.Port)
