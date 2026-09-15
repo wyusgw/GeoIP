@@ -42,6 +42,61 @@ func resolveLang(lang string) string {
 	return defaultLang
 }
 
+var validFields = map[string]bool{
+	"ip":      true,
+	"country": true,
+	"region":  true,
+	"city":    true,
+}
+
+// parseFields parses a comma-separated fields query param. It returns nil
+// when raw is empty, meaning "no filtering, return all fields".
+func parseFields(raw string) ([]string, error) {
+	if raw == "" {
+		return nil, nil
+	}
+
+	parts := strings.Split(raw, ",")
+	fields := make([]string, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+
+	for _, p := range parts {
+		f := strings.TrimSpace(p)
+		if f == "" {
+			continue
+		}
+		if !validFields[f] {
+			return nil, fmt.Errorf("invalid field: %s", f)
+		}
+		if !seen[f] {
+			seen[f] = true
+			fields = append(fields, f)
+		}
+	}
+
+	if len(fields) == 0 {
+		return nil, nil
+	}
+
+	return fields, nil
+}
+
+func filterResponse(res Response, fields []string) map[string]interface{} {
+	full := map[string]interface{}{
+		"ip":      res.IP,
+		"country": res.Country,
+		"region":  res.Region,
+		"city":    res.City,
+	}
+
+	out := make(map[string]interface{}, len(fields))
+	for _, f := range fields {
+		out[f] = full[f]
+	}
+
+	return out
+}
+
 var (
 	db  *maxminddb.Reader
 	cfg Config
@@ -222,6 +277,12 @@ func geoHandler(w http.ResponseWriter, r *http.Request) {
 
 	lang := resolveLang(r.URL.Query().Get("lang"))
 
+	fields, err := parseFields(r.URL.Query().Get("fields"))
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+
 	res, err := lookupIP(ipStr, lang)
 	if err != nil {
 		status := http.StatusInternalServerError
@@ -229,6 +290,11 @@ func geoHandler(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusBadRequest
 		}
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), status)
+		return
+	}
+
+	if fields != nil {
+		_ = json.NewEncoder(w).Encode(filterResponse(res, fields))
 		return
 	}
 
@@ -272,6 +338,26 @@ func batchHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lang := resolveLang(r.URL.Query().Get("lang"))
+
+	fields, err := parseFields(r.URL.Query().Get("fields"))
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+
+	if fields != nil {
+		results := make([]interface{}, len(req.IPs))
+		for i, ipStr := range req.IPs {
+			res, err := lookupIP(ipStr, lang)
+			if err != nil {
+				results[i] = BatchResult{IP: ipStr, Error: err.Error()}
+				continue
+			}
+			results[i] = filterResponse(res, fields)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": results})
+		return
+	}
 
 	results := make([]BatchResult, len(req.IPs))
 	for i, ipStr := range req.IPs {

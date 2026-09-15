@@ -80,6 +80,7 @@ export CONFIG=/path/to/config.json
 **參數**:
 - `ip` (可選): 要查詢的 IP 地址。如果未提供，則使用請求者的 IP。
 - `lang` (可選): 回應語言，支援 `en`（預設）、`zh-CN`、`ja`、`ko`、`ru`、`fr`、`de`、`es`、`pt-BR`、`fa`。若資料庫中無對應翻譯（例如 MaxMind GeoLite2 未內建 `ko`、`fa` 譯名），會自動回退為 `en`。
+- `fields` (可選): 以逗號分隔要回傳的欄位，可選 `ip`、`country`、`region`、`city`。未提供時回傳所有欄位；帶入未知欄位會回傳 `400`。
 
 **回應**:
 ```json
@@ -96,12 +97,24 @@ export CONFIG=/path/to/config.json
 curl "http://localhost:8080/api/v1/geoip?ip=8.8.8.8&lang=zh-CN"
 ```
 
+只回傳部分欄位：
+```bash
+curl "http://localhost:8080/api/v1/geoip?ip=8.8.8.8&fields=country,city"
+```
+```json
+{
+  "country": "United States",
+  "city": "San Francisco"
+}
+```
+
 ### 批次查詢 IP 地理位置
 
 **端點**: `POST /api/v1/geoip/batch`
 
 **參數**:
 - `lang` (可選, query string): 回應語言，支援 `en`（預設）、`zh-CN`、`ja`、`ko`、`ru`、`fr`、`de`、`es`、`pt-BR`、`fa`，套用於整批結果。
+- `fields` (可選, query string): 以逗號分隔要回傳的欄位，可選 `ip`、`country`、`region`、`city`，套用於整批結果（查詢失敗的項目仍固定回傳 `ip` 與 `error`）。未提供時回傳所有欄位；帶入未知欄位會回傳 `400`。
 
 **請求主體**（最多 100 個 IP）:
 ```json
