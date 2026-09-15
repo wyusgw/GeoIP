@@ -43,10 +43,13 @@ func resolveLang(lang string) string {
 }
 
 var validFields = map[string]bool{
-	"ip":      true,
-	"country": true,
-	"region":  true,
-	"city":    true,
+	"ip":                 true,
+	"country":            true,
+	"region":             true,
+	"city":               true,
+	"country_geoname_id": true,
+	"region_geoname_id":  true,
+	"city_geoname_id":    true,
 }
 
 // parseFields parses a comma-separated fields query param. It returns nil
@@ -81,12 +84,25 @@ func parseFields(raw string) ([]string, error) {
 	return fields, nil
 }
 
-func filterResponse(res Response, fields []string) map[string]interface{} {
+// GeoIDs carries the raw mmdb geoname_id values behind a lookup. They're
+// kept out of Response (and thus out of the default, unfiltered JSON shape)
+// and only surfaced via fields=*_geoname_id, mainly to debug gaps in the
+// local name-mapping table (see README's "本地翻譯對照表").
+type GeoIDs struct {
+	Country uint32
+	Region  uint32
+	City    uint32
+}
+
+func filterResponse(res Response, ids GeoIDs, fields []string) map[string]interface{} {
 	full := map[string]interface{}{
-		"ip":      res.IP,
-		"country": res.Country,
-		"region":  res.Region,
-		"city":    res.City,
+		"ip":                 res.IP,
+		"country":            res.Country,
+		"region":             res.Region,
+		"city":               res.City,
+		"country_geoname_id": ids.Country,
+		"region_geoname_id":  ids.Region,
+		"city_geoname_id":    ids.City,
 	}
 
 	out := make(map[string]interface{}, len(fields))
@@ -296,15 +312,15 @@ func getDBInfo(path string) (bool, string, string, float64) {
 		age
 }
 
-func lookupIP(ipStr, lang string, useMapping bool) (Response, error) {
+func lookupIP(ipStr, lang string, useMapping bool) (Response, GeoIDs, error) {
 	addr, err := netip.ParseAddr(ipStr)
 	if err != nil {
-		return Response{}, fmt.Errorf("invalid ip")
+		return Response{}, GeoIDs{}, fmt.Errorf("invalid ip")
 	}
 
 	var g Geo
 	if err := db.Lookup(addr).Decode(&g); err != nil {
-		return Response{}, fmt.Errorf("lookup failed")
+		return Response{}, GeoIDs{}, fmt.Errorf("lookup failed")
 	}
 
 	res := Response{
@@ -313,12 +329,17 @@ func lookupIP(ipStr, lang string, useMapping bool) (Response, error) {
 		Region:  "Unknown",
 		IP:      ipStr,
 	}
+	ids := GeoIDs{
+		Country: g.Country.GeonameID,
+		City:    g.City.GeonameID,
+	}
 
 	if len(g.Subdivisions) > 0 {
 		res.Region = safe(resolveName(g.Subdivisions[0].GeonameID, g.Subdivisions[0].Names, lang, useMapping))
+		ids.Region = g.Subdivisions[0].GeonameID
 	}
 
-	return res, nil
+	return res, ids, nil
 }
 
 func geoHandler(w http.ResponseWriter, r *http.Request) {
@@ -338,7 +359,7 @@ func geoHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := lookupIP(ipStr, lang, useMapping)
+	res, ids, err := lookupIP(ipStr, lang, useMapping)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if err.Error() == "invalid ip" {
@@ -349,7 +370,7 @@ func geoHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if fields != nil {
-		_ = json.NewEncoder(w).Encode(filterResponse(res, fields))
+		_ = json.NewEncoder(w).Encode(filterResponse(res, ids, fields))
 		return
 	}
 
@@ -404,12 +425,12 @@ func batchHandler(w http.ResponseWriter, r *http.Request) {
 	if fields != nil {
 		results := make([]interface{}, len(req.IPs))
 		for i, ipStr := range req.IPs {
-			res, err := lookupIP(ipStr, lang, useMapping)
+			res, ids, err := lookupIP(ipStr, lang, useMapping)
 			if err != nil {
 				results[i] = BatchResult{IP: ipStr, Error: err.Error()}
 				continue
 			}
-			results[i] = filterResponse(res, fields)
+			results[i] = filterResponse(res, ids, fields)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{"results": results})
 		return
@@ -417,7 +438,7 @@ func batchHandler(w http.ResponseWriter, r *http.Request) {
 
 	results := make([]BatchResult, len(req.IPs))
 	for i, ipStr := range req.IPs {
-		res, err := lookupIP(ipStr, lang, useMapping)
+		res, _, err := lookupIP(ipStr, lang, useMapping)
 		if err != nil {
 			results[i] = BatchResult{IP: ipStr, Error: err.Error()}
 			continue

@@ -82,7 +82,7 @@ export CONFIG=/path/to/config.json
 **參數**:
 - `ip` (可選): 要查詢的 IP 地址。如果未提供，則使用請求者的 IP。
 - `lang` (可選): 回應語言，支援 `en`（預設）、`zh-CN`、`ja`、`ko`、`ru`、`fr`、`de`、`es`、`pt-BR`、`fa`。若資料庫中無對應翻譯（例如 MaxMind GeoLite2 未內建 `ko`、`fa` 譯名），會自動回退為 `en`。
-- `fields` (可選): 以逗號分隔要回傳的欄位，可選 `ip`、`country`、`region`、`city`。未提供時回傳所有欄位；帶入未知欄位會回傳 `400`。
+- `fields` (可選): 以逗號分隔要回傳的欄位，可選 `ip`、`country`、`region`、`city`、`country_geoname_id`、`region_geoname_id`、`city_geoname_id`。未提供時回傳所有基本欄位（`ip`/`country`/`region`/`city`，不含 `*_geoname_id`）；帶入未知欄位會回傳 `400`。`*_geoname_id` 欄位回傳 mmdb 原始的 GeoNames geonameid，用來核對「本地翻譯對照表」章節裡對照表的 key 是否正確。
 - `translate` (可選，布林值，預設 `false`): 是否在資料庫沒有該語言翻譯時，套用本地翻譯對照表（`name_mapping_path`）作為 fallback。資料庫本身若已有對應語言的翻譯，一律優先採用資料庫的值，對照表只補資料庫沒有的部分。
 
 **回應**:
@@ -117,7 +117,7 @@ curl "http://localhost:8080/api/v1/geoip?ip=8.8.8.8&fields=country,city"
 
 **參數**:
 - `lang` (可選, query string): 回應語言，支援 `en`（預設）、`zh-CN`、`ja`、`ko`、`ru`、`fr`、`de`、`es`、`pt-BR`、`fa`，套用於整批結果。
-- `fields` (可選, query string): 以逗號分隔要回傳的欄位，可選 `ip`、`country`、`region`、`city`，套用於整批結果（查詢失敗的項目仍固定回傳 `ip` 與 `error`）。未提供時回傳所有欄位；帶入未知欄位會回傳 `400`。
+- `fields` (可選, query string): 以逗號分隔要回傳的欄位，可選 `ip`、`country`、`region`、`city`、`country_geoname_id`、`region_geoname_id`、`city_geoname_id`，套用於整批結果（查詢失敗的項目仍固定回傳 `ip` 與 `error`）。未提供時回傳所有基本欄位；帶入未知欄位會回傳 `400`。
 - `translate` (可選, query string, 布林值, 預設 `false`): 同單一查詢的 `translate`，套用於整批結果。
 
 **請求主體**（最多 100 個 IP）:
