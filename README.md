@@ -116,9 +116,24 @@ curl "http://localhost:8080/api/v1/geoip?ip=8.8.8.8&fields=country,city"
 }
 ```
 
-同時指定語言、欄位過濾與翻譯對照表 fallback：
+指定語言與欄位過濾：
 ```bash
-curl "http://localhost:8080/api/v1/geoip?ip=8.8.8.8&lang=zh-CN&fields=country,region,city&translate=true"
+curl "http://localhost:8080/api/v1/geoip?ip=8.8.8.8&lang=zh-CN&fields=country,region,city"
+```
+
+套用本地翻譯對照表作為 fallback（需先在配置中設定 `name_mapping_path`）。當資料庫本身無對應語言的翻譯時，會從對照表中查找；若對照表也沒有，則回退為英文原名：
+```bash
+curl "http://localhost:8080/api/v1/geoip?ip=8.8.8.8&lang=zh-CN&translate=true"
+```
+
+回應範例（假設對照表有 China / Zhejiang 的中文翻譯，但 San Francisco 無翻譯）：
+```json
+{
+  "country": "中国",
+  "region": "浙江",
+  "city": "San Francisco",
+  "ip": "8.8.8.8"
+}
 ```
 
 **錯誤情況**：
