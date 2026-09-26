@@ -73,7 +73,7 @@ export CONFIG=/path/to/config.json
 
 ## API 使用
 
-所有端點均以 `/api/v1` 為前綴。
+所有端點均以 `/api/v1` 為前綴。以下各項功能也整理成一份可直接執行的演示腳本，見 [`examples/demo.sh`](examples/demo.sh)（服務啟動後執行 `./examples/demo.sh` 即可依序呼叫所有端點）。
 
 ### 查詢單一 IP 地理位置
 
