@@ -73,7 +73,7 @@ export CONFIG=/path/to/config.json
 
 ## API 使用
 
-所有端點均以 `/api/v1` 為前綴。以下各項功能也整理成一份可直接執行的演示腳本，見 [`examples/demo.sh`](examples/demo.sh)（服務啟動後執行 `./examples/demo.sh` 即可依序呼叫所有端點）。
+所有端點均以 `/api/v1` 為前綴。
 
 ### 查詢單一 IP 地理位置
 
@@ -100,6 +100,11 @@ export CONFIG=/path/to/config.json
 curl "http://localhost:8080/api/v1/geoip?ip=8.8.8.8&lang=zh-CN"
 ```
 
+不帶 `ip` 參數時，改查詢請求者自身的 IP（優先讀取 `X-Forwarded-For`、其次 `X-Real-IP`，最後才用 TCP 連線的來源位址；服務前面若有反向代理，需自行設定轉送這些 header）：
+```bash
+curl "http://localhost:8080/api/v1/geoip"
+```
+
 只回傳部分欄位：
 ```bash
 curl "http://localhost:8080/api/v1/geoip?ip=8.8.8.8&fields=country,city"
@@ -109,6 +114,29 @@ curl "http://localhost:8080/api/v1/geoip?ip=8.8.8.8&fields=country,city"
   "country": "United States",
   "city": "San Francisco"
 }
+```
+
+同時指定語言、欄位過濾與翻譯對照表 fallback：
+```bash
+curl "http://localhost:8080/api/v1/geoip?ip=8.8.8.8&lang=zh-CN&fields=country,region,city&translate=true"
+```
+
+**錯誤情況**：
+
+IP 格式錯誤（回傳 `400`）：
+```bash
+curl -i "http://localhost:8080/api/v1/geoip?ip=not-an-ip"
+```
+```json
+{"error":"invalid ip"}
+```
+
+`fields` 帶入未定義的欄位名稱（回傳 `400`）：
+```bash
+curl -i "http://localhost:8080/api/v1/geoip?ip=8.8.8.8&fields=foo"
+```
+```json
+{"error":"invalid field: foo"}
 ```
 
 ### 批次查詢 IP 地理位置
@@ -149,6 +177,25 @@ curl -X POST "http://localhost:8080/api/v1/geoip/batch?lang=ja" \
   -d '{"ips":["8.8.8.8","1.1.1.1"]}'
 ```
 
+只回傳部分欄位（`fields` 套用於整批結果，查詢失敗的項目仍固定回傳 `ip` 與 `error`）：
+```bash
+curl -X POST "http://localhost:8080/api/v1/geoip/batch?fields=country,city" \
+  -H "Content-Type: application/json" \
+  -d '{"ips":["8.8.8.8","1.1.1.1","not-an-ip"]}'
+```
+
+**錯誤情況**：
+
+`ips` 為空陣列、超過 100 筆，或請求主體不是合法 JSON 時，整個請求回傳 `400`（單筆 IP 格式錯誤則仍是 `200`，錯誤反映在該筆結果的 `error` 欄位，見上方回應範例）：
+```bash
+curl -i -X POST "http://localhost:8080/api/v1/geoip/batch" \
+  -H "Content-Type: application/json" \
+  -d '{"ips":[]}'
+```
+```json
+{"error":"ips must not be empty"}
+```
+
 ### 健康檢查
 
 如果啟用健康檢查（`enable_health: true`），則可以使用以下端點：
@@ -166,6 +213,24 @@ curl -X POST "http://localhost:8080/api/v1/geoip/batch?lang=ja" \
 }
 ```
 
+**範例**:
+```bash
+curl "http://localhost:8080/api/v1/health"
+```
+
+當資料庫檔案不存在或查詢測試失敗時，`status` 會變成 `degraded`，同時回傳 HTTP `503`：
+```json
+{
+  "status": "degraded",
+  "db": "fail",
+  "last_update": "",
+  "age_hours": "0.00",
+  "size": "0 MB"
+}
+```
+
+未啟用健康檢查（`enable_health: false` 或未設定）時，此端點不會註冊，請求會得到 `404`。
+
 ### 版本資訊
 
 **端點**: `GET /api/v1/version`
@@ -175,6 +240,11 @@ curl -X POST "http://localhost:8080/api/v1/geoip/batch?lang=ja" \
 {
   "version": "1.0.0"
 }
+```
+
+**範例**:
+```bash
+curl "http://localhost:8080/api/v1/version"
 ```
 
 ## 本地翻譯對照表
