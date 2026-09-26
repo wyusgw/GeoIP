@@ -14,61 +14,223 @@
 mkdir -p /opt/geoip/{bin,data,conf,logs}
 ```
 
+## 環境要求
+
+- **Go 版本**: 1.24.0 或更高
+- **系統支援**: Linux、macOS、Windows
+- **資料庫**: MaxMind GeoLite2 或 DB-IP mmdb 格式資料庫
+- **磁碟空間**: 至少 100MB（用於資料庫及日誌）
+
 ## 編譯
 
-確保您已安裝 Go 1.24.0 或更高版本。
+### 前置步驟
 
+1. 確保已安裝 Go 1.24.0 或更高版本：
 ```bash
+go version
+```
+
+2. 克隆或下載專案：
+```bash
+git clone https://github.com/wyusgw/GeoIP.git
+cd GeoIP
+```
+
+3. 下載依賴：
+```bash
+go mod download
 go mod tidy
+```
+
+### 編譯步驟
+
+**Linux/macOS 本地編譯**:
+```bash
 go build -o geoip-service main.go
+```
+
+**交叉編譯為 Linux amd64**（適合在 macOS 或 Windows 上編譯給 Linux 伺服器使用）:
+```bash
 GOOS=linux GOARCH=amd64 go build -o geoip-service main.go
 ```
 
-## 配置
-
-服務使用 JSON 格式的配置檔案。預設會檢查以下路徑：
-
-- `./config.json`
-- `./config/config.json`
-- `/etc/geoip/config.json`
-
-您也可以使用 CLI 參數或環境變數指定配置檔案：
-
+**其他架構**:
 ```bash
-./geoip-service -config /path/to/config.json
+# 編譯為 Linux arm64（例如 Apple Silicon Mac 或 ARM 伺服器）
+GOOS=linux GOARCH=arm64 go build -o geoip-service main.go
+
+# 編譯為 Windows
+GOOS=windows GOARCH=amd64 go build -o geoip-service.exe main.go
 ```
 
-或
+編譯完成後，你會得到可執行檔 `geoip-service`（Windows 上為 `geoip-service.exe`）。
+
+### 驗證編譯
 
 ```bash
-export CONFIG=/path/to/config.json
-./geoip-service
+./geoip-service -h
+# 若無 -h 參數，可嘗試執行，應看到「failed to open config」或類似錯誤（表示程式正常啟動但缺少配置）
 ```
 
-配置檔案範例：
+## 安裝與配置
 
-```json
+### 步驟 1: 準備目錄結構
+
+```bash
+# 建立服務目錄
+mkdir -p /opt/geoip/{bin,data,conf,logs}
+
+# 將編譯好的執行檔複製到 bin 目錄
+cp geoip-service /opt/geoip/bin/
+
+# （可選）建立符號連結以便在任何地方執行
+sudo ln -sf /opt/geoip/bin/geoip-service /usr/local/bin/geoip-service
+```
+
+### 步驟 2: 取得資料庫
+
+**選項 A: MaxMind GeoLite2（免費）**
+
+1. 前往 [MaxMind GeoLite2](https://www.maxmind.com/en/geolite2/signup) 註冊帳號並登入
+2. 下載 `GeoLite2-City.mmdb`
+3. 將檔案複製到 `/opt/geoip/data/`
+
+```bash
+cp GeoLite2-City.mmdb /opt/geoip/data/
+chmod 644 /opt/geoip/data/GeoLite2-City.mmdb
+```
+
+**選項 B: DB-IP（免費 Lite 版本）**
+
+1. 前往 [DB-IP](https://db-ip.com/) 下載 `dbip-city-lite.mmdb`
+2. 將檔案複製到 `/opt/geoip/data/`
+
+```bash
+cp dbip-city-lite.mmdb /opt/geoip/data/
+chmod 644 /opt/geoip/data/dbip-city-lite.mmdb
+```
+
+### 步驟 3: 建立配置檔案
+
+在 `/opt/geoip/conf/config.json` 建立配置檔案：
+
+```bash
+cat > /opt/geoip/conf/config.json << 'EOF'
 {
   "port": 8080,
   "mmdb_path": "/opt/geoip/data/GeoLite2-City.mmdb",
   "enable_health": true,
   "name_mapping_path": "/opt/geoip/conf/mapping.json"
 }
+EOF
 ```
 
-- `port`: 服務監聽的端口（預設 8080）
-- `mmdb_path`: MaxMind 資料庫檔案的路徑（必需）
-- `enable_health`: 是否啟用健康檢查端點（預設 false）
-- `name_mapping_path` (可選): 本地翻譯對照表檔案路徑，見下方「本地翻譯對照表」章節。留空則不啟用。
+或如果使用 DB-IP：
+
+```bash
+cat > /opt/geoip/conf/config.json << 'EOF'
+{
+  "port": 8080,
+  "mmdb_path": "/opt/geoip/data/dbip-city-lite.mmdb",
+  "enable_health": true,
+  "name_mapping_path": ""
+}
+EOF
+```
+
+**配置欄位說明**:
+
+| 欄位 | 類型 | 必需 | 預設值 | 說明 |
+|------|------|------|--------|------|
+| `port` | 整數 | 否 | 8080 | 服務監聽的 TCP 連接埠 |
+| `mmdb_path` | 字串 | 是 | 無 | MaxMind/DB-IP mmdb 資料庫檔案的絕對路徑 |
+| `enable_health` | 布林 | 否 | false | 是否啟用 `/api/v1/health` 端點 |
+| `name_mapping_path` | 字串 | 否 | 空字串 | 本地翻譯對照表 JSON 檔路徑（見下方「本地翻譯對照表」）；留空則不啟用 |
+
+### 步驟 4: 配置路徑優先順序
+
+服務會依以下順序查找配置檔案（先找到的使用）：
+
+1. **CLI 參數** (最高優先):
+   ```bash
+   ./geoip-service -config /etc/myconfig.json
+   ```
+
+2. **環境變數**:
+   ```bash
+   export CONFIG=/etc/myconfig.json
+   ./geoip-service
+   ```
+
+3. **預設路徑** (依順序查找):
+   - `./config.json` (當前目錄)
+   - `./config/config.json` (當前目錄下的 config 子目錄)
+   - `/etc/geoip/config.json` (系統全域)
 
 ## 運行
 
-1. 下載 MaxMind GeoLite2 資料庫（例如 GeoLite2-City.mmdb）
-2. 將資料庫檔案放置在配置中指定的路徑
-3. 運行服務：
+### 本地開發環境
 
+1. 在專案根目錄建立 `config.json`：
+```bash
+cat > config.json << 'EOF'
+{
+  "port": 8080,
+  "mmdb_path": "./GeoLite2-City.mmdb",
+  "enable_health": true,
+  "name_mapping_path": ""
+}
+EOF
+```
+
+2. 將資料庫檔案放到專案根目錄
+
+3. 直接執行：
 ```bash
 ./geoip-service
+```
+
+服務應在 `http://localhost:8080` 啟動。
+
+### 生產環境（使用已安裝的目錄結構）
+
+```bash
+# 方法 1: 指定配置路徑
+/opt/geoip/bin/geoip-service -config /opt/geoip/conf/config.json
+
+# 方法 2: 使用環境變數
+export CONFIG=/opt/geoip/conf/config.json
+/opt/geoip/bin/geoip-service
+
+# 方法 3: 使用符號連結且配置在預設路徑
+geoip-service
+```
+
+### 搭配反向代理（nginx/Apache）
+
+若服務前面有反向代理，請在 nginx 配置中設定以下 header（以便服務正確取得用戶真實 IP）：
+
+**nginx 範例**:
+```nginx
+location /api/v1/geoip {
+    proxy_pass http://localhost:8080;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
+
+之後查詢時無需帶 `ip` 參數，服務會自動讀取 `X-Forwarded-For` 或 `X-Real-IP`。
+
+### 背景執行與日誌
+
+**使用 nohup 在背景執行**:
+```bash
+nohup /opt/geoip/bin/geoip-service -config /opt/geoip/conf/config.json > /opt/geoip/logs/geoip.log 2>&1 &
+```
+
+**檢視日誌**:
+```bash
+tail -f /opt/geoip/logs/geoip.log
 ```
 
 ## API 使用
@@ -302,46 +464,196 @@ GeoNames 的資料裡中文名稱多半標記在通用的 `zh`（而非 `zh-CN`�
 
 **注意**：原始的 `alternateNamesV2.txt`（748MB）與跑出來的完整 `mapping.json` 都不會進版本控制（見 `.gitignore`），請自行下載/產生並部署到伺服器上，只有 `name_mapping_path` 指向的檔案需要放到部署環境即可。未設定 `name_mapping_path`（或檔案讀取失敗）時，`translate=true` 不會有任何效果，會直接回退為英文原名，且服務不會因此中斷。
 
-## 系統服務
+## 系統服務管理 (systemd)
 
-專案包含 systemd 服務檔案 `geoip.service`，可用於將服務安裝為系統服務。
+### 安裝為系統服務
 
-1. 複製 `geoip.service` 到 `/etc/systemd/system/`
-2. 重新載入 systemd：
+1. **複製 systemd 服務檔案**:
+```bash
+sudo cp geoip.service /etc/systemd/system/
+```
 
+2. **編輯服務檔案（可選）** - 若路徑不同，需修改：
+```bash
+sudo nano /etc/systemd/system/geoip.service
+```
+
+服務檔案應類似：
+```ini
+[Unit]
+Description=GeoIP Service
+After=network.target
+
+[Service]
+Type=simple
+User=geoip
+ExecStart=/opt/geoip/bin/geoip-service -config /opt/geoip/conf/config.json
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+3. **建立專用用戶**（可選但推薦）:
+```bash
+sudo useradd -r -s /bin/false geoip
+sudo chown -R geoip:geoip /opt/geoip
+```
+
+4. **重新載入 systemd**:
 ```bash
 sudo systemctl daemon-reload
 ```
 
-3. 啟動服務：
+### 控制服務
 
+**啟動服務**:
 ```bash
 sudo systemctl start geoip
 ```
 
-4. 設定開機自啟動：
+**停止服務**:
+```bash
+sudo systemctl stop geoip
+```
 
+**重啟服務**:
+```bash
+sudo systemctl restart geoip
+```
+
+**檢查服務狀態**:
+```bash
+sudo systemctl status geoip
+```
+
+**設定開機自啟動**:
 ```bash
 sudo systemctl enable geoip
 ```
 
-5.  定时更新 MaxMind 資料庫可以使用 `geoipupdate` 工具，請參考以下說明。
-
-## 定时更新安装
-
+**禁用開機自啟動**:
 ```bash
-apt install geoipupdate
+sudo systemctl disable geoip
 ```
 
-## 定时任务配置
-
+**即時日誌**:
 ```bash
-crontab -e
+sudo journalctl -u geoip -f
 ```
 
+### 驗證服務正常運作
+
 ```bash
-0 3 * * 2,5 /usr/bin/geoipupdate -f /opt/geoip/conf/GeoIP.conf -v
-0 3 * * 2,5 /usr/bin/geoipupdate
+# 檢查服務是否在監聽連接埠
+sudo ss -tlnp | grep geoip
+
+# 快速測試 API
+curl http://localhost:8080/api/v1/version
+curl http://localhost:8080/api/v1/health
+```
+
+## 資料庫定期更新
+
+### 自動更新方案 1: 使用 geoipupdate（MaxMind 官方工具）
+
+**安裝**:
+```bash
+# Ubuntu/Debian
+sudo apt-get install geoipupdate
+
+# CentOS/RHEL
+sudo yum install geoipupdate
+```
+
+**配置** - 編輯 `/etc/GeoIP.conf`：
+```bash
+sudo nano /etc/GeoIP.conf
+```
+
+內容應包含（需提供 MaxMind 帳號 ID 和密鑰）：
+```ini
+AccountID 123456
+LicenseKey 1234567890abcdef
+EditionIDs GeoLite2-City
+DatabaseDirectory /opt/geoip/data
+```
+
+**執行更新**:
+```bash
+sudo geoipupdate
+```
+
+**定期更新** - 編輯 crontab：
+```bash
+sudo crontab -e
+```
+
+新增（每週二、五的 03:00 執行）:
+```bash
+0 3 * * 2,5 /usr/bin/geoipupdate -f /etc/GeoIP.conf && sudo systemctl restart geoip
+```
+
+### 自動更新方案 2: 手動下載 + cron 腳本
+
+建立更新腳本 `/opt/geoip/scripts/update-db.sh`：
+```bash
+#!/bin/bash
+# 下載並更新資料庫
+
+DB_DIR="/opt/geoip/data"
+BACKUP_DIR="/opt/geoip/data/backup"
+TEMP_DIR="/tmp/geoip-update"
+
+# 建立備份目錄
+mkdir -p "$BACKUP_DIR"
+mkdir -p "$TEMP_DIR"
+
+# 備份現有資料庫
+cp "$DB_DIR/GeoLite2-City.mmdb" "$BACKUP_DIR/GeoLite2-City.mmdb.$(date +%Y%m%d_%H%M%S)" 2>/dev/null || true
+
+# 下載新資料庫（需替換為實際下載連結）
+cd "$TEMP_DIR"
+wget -q https://example.com/GeoLite2-City.mmdb -O GeoLite2-City.mmdb.new
+
+# 驗證檔案
+if [ -f "GeoLite2-City.mmdb.new" ] && [ -s "GeoLite2-City.mmdb.new" ]; then
+    mv "GeoLite2-City.mmdb.new" "$DB_DIR/GeoLite2-City.mmdb"
+    echo "[$(date)] 資料庫更新成功" >> /opt/geoip/logs/update.log
+    # 重啟服務使新資料庫生效
+    sudo systemctl restart geoip
+else
+    echo "[$(date)] 資料庫下載失敗" >> /opt/geoip/logs/update.log
+fi
+
+# 清理臨時檔案
+rm -f "$TEMP_DIR/GeoLite2-City.mmdb.new"
+```
+
+設定執行權限並加入 cron：
+```bash
+chmod +x /opt/geoip/scripts/update-db.sh
+
+# 編輯 crontab
+sudo crontab -e
+```
+
+新增：
+```bash
+0 3 * * 2,5 /opt/geoip/scripts/update-db.sh
+```
+
+### 監控資料庫更新
+
+檢查資料庫檔案的修改時間：
+```bash
+ls -lh /opt/geoip/data/GeoLite2-City.mmdb
+```
+
+查看健康檢查端點中的資料庫年份：
+```bash
+curl http://localhost:8080/api/v1/health | jq .last_update
 ```
 
 
